@@ -1,6 +1,7 @@
 package com.bor96dev.speakeasy.recordingapp
 
 import android.app.Service
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.hardware.display.DisplayManager
@@ -11,6 +12,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
 import android.os.Parcelable
+import android.provider.MediaStore
 import androidx.core.content.getSystemService
 import androidx.window.layout.WindowMetricsCalculator
 import kotlinx.coroutines.CoroutineScope
@@ -19,8 +21,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.parcelize.Parcelize
 import java.io.File
+import java.io.FileInputStream
 
 @Parcelize
 data class ScreenRecordConfig(
@@ -54,7 +58,45 @@ class ScreenRecordService : Service() {
         override fun onStop() {
             super.onStop()
             releaseResources()
+            stopService()
+            saveToGallery()
         }
+    }
+
+    private fun saveToGallery() {
+        serviceScope.launch{
+            val contentValues = ContentValues().apply{
+                put(MediaStore.Video.Media.DISPLAY_NAME, "video_${System.currentTimeMillis()}.mp4")
+                put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Recordings")
+            }
+            val videoCollection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            }
+
+            contentResolver.insert(videoCollection, contentValues)?.let{ uri ->
+                contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    FileInputStream(outputFile).use {inputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+
+                }
+
+            }
+        }
+    }
+
+    private fun stopRecording(){
+        mediaRecorder.stop()
+        mediaProjection?.stop()
+        mediaRecorder.reset()
+    }
+
+    private fun stopService(){
+        _isServiceRunning.value = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun getWindowSize(): Pair<Int, Int> {
@@ -123,6 +165,7 @@ class ScreenRecordService : Service() {
         when (intent?.action) {
             START_RECORDING -> {
                 val notification = NotificationHelper.createNotification(applicationContext)
+                NotificationHelper.createNotificationChannel(applicationContext)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
                         1,
@@ -141,7 +184,7 @@ class ScreenRecordService : Service() {
             }
 
             STOP_RECORDING -> {
-
+                stopRecording()
             }
 
         }
@@ -174,7 +217,10 @@ class ScreenRecordService : Service() {
     }
 
     private fun releaseResources() {
-
+        mediaRecorder.release()
+        virtualDisplay?.release()
+        mediaProjection?.unregisterCallback(mediaProjectionCallback)
+        mediaProjection = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

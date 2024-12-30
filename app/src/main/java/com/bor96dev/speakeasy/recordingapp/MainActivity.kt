@@ -1,7 +1,9 @@
 package com.bor96dev.speakeasy.recordingapp
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -24,17 +26,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
+import androidx.core.content.getSystemService
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bor96dev.speakeasy.recordingapp.ScreenRecordService.Companion.KEY_RECORDING_CONFIG
+import com.bor96dev.speakeasy.recordingapp.ScreenRecordService.Companion.START_RECORDING
+import com.bor96dev.speakeasy.recordingapp.ScreenRecordService.Companion.STOP_RECORDING
 import com.bor96dev.speakeasy.recordingapp.ui.theme.CoralRed
 import com.bor96dev.speakeasy.recordingapp.ui.theme.MintGreen
 import com.bor96dev.speakeasy.recordingapp.ui.theme.RecordingAppTheme
 
 class MainActivity : ComponentActivity() {
+    private val mediaProjectionManager by lazy {
+        getSystemService<MediaProjectionManager>()!!
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             RecordingAppTheme {
-                var isServiceRunning by remember { mutableStateOf(false) }
+                val isServiceRunning by ScreenRecordService
+                    .isServiceRunning
+                    .collectAsStateWithLifecycle()
+                
                 var hasNotificationPermission by remember {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         mutableStateOf(
@@ -45,12 +59,32 @@ class MainActivity : ComponentActivity() {
                         )
                     } else mutableStateOf(true)
                 }
+                val screenRecordLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.StartActivityForResult()
+                ) { result ->
+                    val intent = result?.data ?: return@rememberLauncherForActivityResult
+                    val config = ScreenRecordConfig(
+                        resultCode = result.resultCode,
+                        data = intent
+                    )
+                    val serviceIntent = Intent(
+                        applicationContext,
+                        ScreenRecordService::class.java
+                    ).apply {
+                        action = START_RECORDING
+                        putExtra(KEY_RECORDING_CONFIG, config)
+                    }
+                    startForegroundService(serviceIntent)
+                }
+
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission()
                 ) { isGranted ->
                     hasNotificationPermission = isGranted
                     if (hasNotificationPermission && !isServiceRunning) {
-                        // Launch media projection service
+                        screenRecordLauncher.launch(
+                            mediaProjectionManager.createScreenCaptureIntent()
+                        )
                     }
                 }
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
@@ -66,9 +100,17 @@ class MainActivity : ComponentActivity() {
                                     permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                 } else {
                                     if (isServiceRunning) {
-                                        // stop
+                                        Intent(
+                                            applicationContext,
+                                            ScreenRecordService::class.java
+                                        ).also {
+                                            it.action = STOP_RECORDING
+                                            startForegroundService(it)
+                                        }
                                     } else {
-                                        //start
+                                        screenRecordLauncher.launch(
+                                            mediaProjectionManager.createScreenCaptureIntent()
+                                        )
                                     }
                                 }
                             },
