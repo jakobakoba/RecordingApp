@@ -27,6 +27,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".ScreenRecordService"
+            android:exported="false"
+            android:enabled="true"
+            android:foregroundServiceType="mediaProjection"
+            />
     </application>
 
 </manifest>
